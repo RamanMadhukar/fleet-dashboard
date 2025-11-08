@@ -1,16 +1,23 @@
-// src/App.jsx
+// src/App.jsx - ENHANCED VERSION with all features
 import React, { useState, useEffect, useMemo } from 'react';
-import { Play, Pause, RotateCcw, Truck, AlertTriangle, MapPin, Gauge, Clock, TrendingUp, Upload } from 'lucide-react';
+import { Play, Pause, RotateCcw, Truck, AlertTriangle, MapPin, Clock, TrendingUp, Upload, Fuel, Zap } from 'lucide-react';
 import './App.css';
-import FileUpload from './components/FileUpload';
+import EventTimeline from './components/EventTimeline';
 import MetricCard from './components/MetricCard';
+import FileUpload from './components/FileUpload';
 import TripCard from './components/TripCard';
+import RouteMap from './components/RouteMap';
+import SpeedChart from './components/SpeedChart';
+import FuelChart from './components/FuelChart';
+import BatteryChart from './components/BatteryChart';
+import TelemetryPanel from './components/TelemetryPanel';
 
 const processEvents = (events, currentTime) => {
-  if (!currentTime) return { tripStates: [], visibleEvents: [] };
+  if (!currentTime) return { tripStates: [], visibleEvents: [], telemetryData: {} };
 
   const visibleEvents = events.filter(event => event.parsedTimestamp <= currentTime);
   const states = {};
+  const telemetryData = {};
 
   visibleEvents.forEach(event => {
     const tripId = event.trip_id;
@@ -33,11 +40,30 @@ const processEvents = (events, currentTime) => {
         lastLocation: null,
         heading: 0,
         signalQuality: 'unknown',
-        totalDuration: 0
+        totalDuration: 0,
+        stopDuration: 0,
+        refuelingCount: 0,
+        signalLosses: 0,
+        speedViolations: 0,
+        lastTelemetry: null,
+        stops: [],
+        refuelings: [],
+        speedHistory: [],
+        fuelHistory: [],
+        batteryHistory: [],
+        routePoints: []
+      };
+
+      telemetryData[tripId] = {
+        speedData: [],
+        fuelData: [],
+        batteryData: [],
+        telemetryPoints: []
       };
     }
 
     const state = states[tripId];
+    const telemetry = telemetryData[tripId];
     state.eventCount++;
     state.lastUpdate = event.parsedTimestamp;
 
@@ -50,8 +76,25 @@ const processEvents = (events, currentTime) => {
         state.distance = event.distance_travelled_km || 0;
         state.signalQuality = event.signal_quality || 'unknown';
         state.battery = event.device?.battery_level || state.battery;
+
+        // Add to route points
+        if (event.location) {
+          state.routePoints.push({
+            lat: event.location.lat,
+            lng: event.location.lng,
+            timestamp: event.parsedTimestamp
+          });
+        }
+
+        // Add to time series data
+        const timeStr = new Date(event.parsedTimestamp).toLocaleTimeString();
+        telemetry.speedData.push({ time: timeStr, speed: state.speed });
+        telemetry.fuelData.push({ time: timeStr, fuel: state.fuel });
+        telemetry.batteryData.push({ time: timeStr, battery: state.battery });
+
         if (event.overspeed) {
-          state.alerts.push({ type: 'overspeed', time: event.parsedTimestamp });
+          state.alerts.push({ type: 'overspeed', time: event.parsedTimestamp, data: event });
+          state.speedViolations++;
         }
         break;
 
@@ -71,14 +114,70 @@ const processEvents = (events, currentTime) => {
       case 'trip_cancelled':
         state.status = 'cancelled';
         state.progress = (state.distance / 5000) * 100;
+        state.alerts.push({ type: 'trip_cancelled', time: event.parsedTimestamp, data: event });
+        break;
+
+      case 'vehicle_stopped':
+        state.stops.push({ startTime: event.parsedTimestamp, location: event.location });
+        state.alerts.push({ type: 'vehicle_stopped', time: event.parsedTimestamp, data: event });
+        break;
+
+      case 'vehicle_moving':
+        const lastStop = state.stops[state.stops.length - 1];
+        if (lastStop && !lastStop.endTime) {
+          lastStop.endTime = event.parsedTimestamp;
+          lastStop.duration = event.stop_duration_minutes || 0;
+          state.stopDuration += lastStop.duration;
+        }
+        state.alerts.push({ type: 'vehicle_moving', time: event.parsedTimestamp, data: event });
         break;
 
       case 'speed_violation':
+        state.alerts.push({ type: 'speed_violation', time: event.parsedTimestamp, data: event });
+        state.speedViolations++;
+        break;
+
+      case 'signal_lost':
+        state.signalLosses++;
+        state.alerts.push({ type: 'signal_lost', time: event.parsedTimestamp, data: event });
+        break;
+
+      case 'signal_recovered':
+        state.alerts.push({ type: 'signal_recovered', time: event.parsedTimestamp, data: event });
+        break;
+
+      case 'refueling_started':
+        state.refuelings.push({ startTime: event.parsedTimestamp, location: event.location });
+        state.alerts.push({ type: 'refueling_started', time: event.parsedTimestamp, data: event });
+        break;
+
+      case 'refueling_completed':
+        const lastRefuel = state.refuelings[state.refuelings.length - 1];
+        if (lastRefuel && !lastRefuel.endTime) {
+          lastRefuel.endTime = event.parsedTimestamp;
+          lastRefuel.duration = event.refuel_duration_minutes || 0;
+          lastRefuel.fuelAdded = event.fuel_added_percent || 0;
+          lastRefuel.finalLevel = event.fuel_level_after_refuel || 0;
+          state.refuelingCount++;
+          state.fuel = lastRefuel.finalLevel;
+        }
+        state.alerts.push({ type: 'refueling_completed', time: event.parsedTimestamp, data: event });
+        break;
+
       case 'device_error':
       case 'battery_low':
       case 'fuel_level_low':
-        state.alerts.push({ type: event.event_type, time: event.parsedTimestamp });
+        state.alerts.push({ type: event.event_type, time: event.parsedTimestamp, data: event });
         break;
+
+      case 'vehicle_telemetry':
+        state.lastTelemetry = event.telemetry;
+        telemetry.telemetryPoints.push({
+          time: new Date(event.parsedTimestamp).toLocaleTimeString(),
+          ...event.telemetry
+        });
+        break;
+
       default:
         break;
     }
@@ -94,7 +193,7 @@ const processEvents = (events, currentTime) => {
     }
   });
 
-  return { tripStates: Object.values(states), visibleEvents };
+  return { tripStates: Object.values(states), visibleEvents, telemetryData };
 };
 
 function App() {
@@ -113,7 +212,7 @@ function App() {
     }
   };
 
-  const { tripStates, visibleEvents } = useMemo(() =>
+  const { tripStates, visibleEvents, telemetryData } = useMemo(() =>
     processEvents(allEvents, currentTime),
     [allEvents, currentTime]
   );
@@ -128,8 +227,10 @@ function App() {
     const totalAlerts = tripStates.reduce((sum, t) => sum + t.alerts.length, 0);
     const avgSpeed = total > 0 ? tripStates.reduce((sum, t) => sum + t.speed, 0) / total : 0;
     const totalDistance = tripStates.reduce((sum, t) => sum + t.distance, 0);
+    const totalViolations = tripStates.reduce((sum, t) => sum + t.speedViolations, 0);
+    const totalRefuelings = tripStates.reduce((sum, t) => sum + t.refuelingCount, 0);
 
-    return { total, active, completed, cancelled, over50, over80, totalAlerts, avgSpeed, totalDistance };
+    return { total, active, completed, cancelled, over50, over80, totalAlerts, avgSpeed, totalDistance, totalViolations, totalRefuelings };
   }, [tripStates]);
 
   useEffect(() => {
@@ -158,13 +259,12 @@ function App() {
     }
   };
 
-  const formatEventType = (type) => {
-    return type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-  };
-
   if (!dataLoaded) {
     return <FileUpload onFilesLoaded={handleFilesLoaded} />;
   }
+
+  const selectedTripData = tripStates.find(t => t.id === selectedTrip);
+  const selectedTripTelemetry = selectedTrip ? telemetryData[selectedTrip] : null;
 
   return (
     <div className="app">
@@ -181,6 +281,7 @@ function App() {
             setDataLoaded(false);
             setAllEvents([]);
             setCurrentTime(null);
+            setSelectedTrip(null);
           }}
           className="btn-upload"
         >
@@ -195,8 +296,8 @@ function App() {
         <MetricCard icon={<AlertTriangle size={20} />} label="Cancelled" value={fleetMetrics.cancelled} color="color-red" />
         <MetricCard icon={<MapPin size={20} />} label=">50% Done" value={fleetMetrics.over50} color="color-yellow" />
         <MetricCard icon={<MapPin size={20} />} label=">80% Done" value={fleetMetrics.over80} color="color-orange" />
-        <MetricCard icon={<AlertTriangle size={20} />} label="Total Alerts" value={fleetMetrics.totalAlerts} color="color-red" />
-        <MetricCard icon={<Gauge size={20} />} label="Avg Speed" value={`${Math.round(fleetMetrics.avgSpeed)} km/h`} color="color-cyan" />
+        <MetricCard icon={<Zap size={20} />} label="Speed Violations" value={fleetMetrics.totalViolations} color="color-red" />
+        <MetricCard icon={<Fuel size={20} />} label="Refuelings" value={fleetMetrics.totalRefuelings} color="color-cyan" />
         <MetricCard icon={<TrendingUp size={20} />} label="Total Distance" value={`${Math.round(fleetMetrics.totalDistance)} km`} color="color-purple" />
       </div>
 
@@ -241,35 +342,76 @@ function App() {
         ))}
       </div>
 
-      {selectedTrip && (
-        <div className="trip-details">
-          <h3>Trip Details: {tripStates.find(t => t.id === selectedTrip)?.name}</h3>
-          <div className="events-grid">
-            {visibleEvents
-              .filter(e => e.trip_id === selectedTrip)
-              .slice(-12)
-              .reverse()
-              .map((event, idx) => (
-                <div key={idx} className="event-card">
-                  <div className="event-time">
-                    {new Date(event.timestamp).toLocaleTimeString()}
-                  </div>
-                  <div className="event-type">
-                    {formatEventType(event.event_type)}
-                  </div>
-                  {event.movement && (
-                    <div className="event-data">
-                      <div>Speed: {Math.round(event.movement.speed_kmh)} km/h</div>
-                      <div>Heading: {Math.round(event.movement.heading_degrees)}°</div>
+      {selectedTripData && selectedTripTelemetry && (
+        <div className="trip-details-enhanced">
+          <div className="details-header">
+            <h2>{selectedTripData.name}</h2>
+            <button onClick={() => setSelectedTrip(null)} className="btn-close">✕</button>
+          </div>
+
+          {/* Route Map */}
+          <div className="detail-section">
+            <RouteMap trip={selectedTripData} />
+          </div>
+
+          {/* Charts Grid */}
+          <div className="charts-grid">
+            <SpeedChart data={selectedTripTelemetry.speedData} />
+            <FuelChart data={selectedTripTelemetry.fuelData} />
+            <BatteryChart data={selectedTripTelemetry.batteryData} />
+          </div>
+
+          {/* Telemetry & Timeline */}
+          <div className="telemetry-timeline-grid">
+            <TelemetryPanel trip={selectedTripData} />
+            <EventTimeline trip={selectedTripData} />
+          </div>
+
+          {/* Detailed Stats */}
+          <div className="detailed-stats">
+            <div className="stats-section">
+              <h4><Clock size={18} /> Stop History</h4>
+              {selectedTripData.stops.length === 0 ? (
+                <p className="empty-message">No stops recorded</p>
+              ) : (
+                <div className="stops-list">
+                  {selectedTripData.stops.map((stop, idx) => (
+                    <div key={idx} className="stop-item">
+                      <div className="stop-time">
+                        {new Date(stop.startTime).toLocaleTimeString()}
+                        {stop.endTime && ` - ${new Date(stop.endTime).toLocaleTimeString()}`}
+                      </div>
+                      {stop.duration && (
+                        <div className="stop-duration">{stop.duration} minutes</div>
+                      )}
                     </div>
-                  )}
-                  {event.location && (
-                    <div className="event-location">
-                      📍 {event.location.lat.toFixed(4)}, {event.location.lng.toFixed(4)}
-                    </div>
-                  )}
+                  ))}
                 </div>
-              ))}
+              )}
+            </div>
+
+            <div className="stats-section">
+              <h4><Fuel size={18} /> Refueling History</h4>
+              {selectedTripData.refuelings.length === 0 ? (
+                <p className="empty-message">No refuelings recorded</p>
+              ) : (
+                <div className="refueling-list">
+                  {selectedTripData.refuelings.map((refuel, idx) => (
+                    <div key={idx} className="refuel-item">
+                      <div className="refuel-time">
+                        {new Date(refuel.startTime).toLocaleTimeString()}
+                      </div>
+                      {refuel.fuelAdded && (
+                        <div className="refuel-amount">+{refuel.fuelAdded}% fuel</div>
+                      )}
+                      {refuel.duration && (
+                        <div className="refuel-duration">{refuel.duration} min</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

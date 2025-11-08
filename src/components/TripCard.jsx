@@ -1,5 +1,5 @@
 import React from 'react'
-import { AlertTriangle, Battery, Signal } from 'lucide-react';
+import { AlertTriangle, Gauge, Clock, Battery, Signal, Fuel, Map as MapIcon } from 'lucide-react';
 
 const TripCard = ({ trip, isSelected, onClick }) => {
     const statusColors = {
@@ -46,26 +46,38 @@ const TripCard = ({ trip, isSelected, onClick }) => {
 
             <div className="trip-stats">
                 <div className="stat">
-                    <div className="stat-label">Speed</div>
+                    <div className="stat-label"><Gauge size={12} /> Speed</div>
                     <div className="stat-value">{Math.round(trip.speed)} km/h</div>
                 </div>
                 <div className="stat">
-                    <div className="stat-label">Distance</div>
+                    <div className="stat-label"><MapIcon size={12} /> Distance</div>
                     <div className="stat-value">{Math.round(trip.distance)} km</div>
                 </div>
                 <div className="stat">
-                    <div className="stat-label">
-                        <Battery size={12} /> Battery
-                    </div>
+                    <div className="stat-label"><Battery size={12} /> Battery</div>
                     <div className="stat-value">{Math.round(trip.battery)}%</div>
                 </div>
                 <div className="stat">
-                    <div className="stat-label">
-                        <Signal size={12} /> Signal
-                    </div>
+                    <div className="stat-label"><Signal size={12} /> Signal</div>
                     <div className={`stat-value ${signalColors[trip.signalQuality]}`}>
                         {trip.signalQuality.toUpperCase()}
                     </div>
+                </div>
+            </div>
+
+            {/* Enhanced Stats */}
+            <div className="trip-enhanced-stats">
+                <div className="enhanced-stat">
+                    <Clock size={14} />
+                    <span>{trip.stopDuration} min stopped</span>
+                </div>
+                <div className="enhanced-stat">
+                    <Fuel size={14} />
+                    <span>{trip.refuelingCount} refuelings</span>
+                </div>
+                <div className="enhanced-stat">
+                    <AlertTriangle size={14} />
+                    <span>{trip.speedViolations} violations</span>
                 </div>
             </div>
 

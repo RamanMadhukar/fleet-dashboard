@@ -69,8 +69,7 @@ const FileUpload = ({ onFilesLoaded }) => {
                             "location": { "lat": 34.052336, "lng": -118.243564 },
                             ...
                         }
-                        ]`
-                    }
+                    ]`}
                 </pre>
             </div>
         </div>
